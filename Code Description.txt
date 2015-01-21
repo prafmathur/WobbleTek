@@ -1,0 +1,131 @@
+This text file contains a description of how floppy_controller.v and floppy_driver.e work, as well as how
+top.v was modified to use floppy_controller.v
+
+***********************
+* Floppy_controller.v *
+***********************
+
+OVERVIEW:
+
+The floppy_controller works by taking in 8 pulse-delay values and then performing combinational logic to
+output a pulse-width modulation signal (PWM) to floppy drives. This pulse-delay corresponds to how long the
+controller should wait before sending a HIGH signal to the stepper motor on the floppy drive. These pulse-
+delay values are calculated by taking the clock signal of the PWM and dividing it by 2x the desired
+frequency (2x because the PWM has a 50% duty cycle, so positive edges only occur once every 2 cycles).
+For example, to achieve the note of A at 440 Hz, the input should be (clock speed)/( 2x desired frequency) =
+(98000)/(880) = 111. This will cause the stepper motor to be pulsed at 440 Hz, and simulate the note of A.
+
+DETAILS:
+
+Floppy_controller.v contains 3 main components: The inputs/outputs and registers, the finite state machine
+(FSM), and the combinational logic.
+
+1) The inputs to floppy_controller.v are:
+     - A 98 kHz clock, which is used for control the rate of the pule-width modulation (PWM)
+     - A 12.5 MHz clock, which is frequency at which the FSM is changed
+	 - Clock_valid and reset, which are external signals
+	 - Eight 16-bit wires for transferring the length of the pulse delay
+	 - A command wire for the standard I/O protocol
+
+   The outputs from floppy_controller.v are:
+     - A response for the standard I/O protocol
+	 - Digital output to the GPIO pins
+
+   The registers for floppy_controller.v are:
+     - state and next_state, to store the current and next states, respectively.
+	 - current_period_out 1 through 8, which store the length of the pulse delay.
+	 - period_out_sync 1 through 8, which are used to synchronize the pulse delay to the combinational logic.
+	 - current_position 1 through 8, which are used to store how far the floppy drive's read/write head has
+	   moved.
+	 - current_state_step 1 through 8, which are used to store the state of the stepping GPIO pins (1 or 0).
+	 - current_state_direction 1 through 8, which are used to store the state of the direction GPIO pins
+	   (1 to go backwards, 0 to go forwards).
+	 - current_tick 1 through 8, which are used as a counter to store how many clock ticks have passed in the
+	   current period.
+
+2) The Finite State Machine (always @* block)
+   The finite state machine has 5 main states: reset, wait, receive, acknowledge1, and acknowledge2
+ 
+   a) state_reset:
+      state_reset simply initializes the current_period_out registers to 0 so that no notes are played.
+   b) state_wait:
+      state_wait waits until the command signal is 1. When it is, the state moves to state_receive.
+   c) state_receive:
+      state_receive takes the values currently stored on the 8 inputs and stores them on current_period_out.
+   d) state_acknowledge1
+      state_acknowledge1 simply sets the floppy response to 1 to acknowledge that the controller has seen
+	  the command signal.
+   e) state_acknowledge2
+      state_acknowledge2 waits until the command sinal goes to 0 to acknowledge that the E100 has seen the
+	  response signal, and then sets next_state to go back to to state_wait.
+
+3) The Combinational Logic (always @(posedge clock_98k) and always @(posedge clock_12_5m) blocks)
+   The combinational logic is composed of four main parts: settting the GPIO pins and registers,
+   synchronizing, resetting, and setting the state.
+ 
+   a) Setting the GPIO pins and registers
+      - First, the controller checks to see if there is even a pulse-delay value in the register for that
+	    respective drive. If there is no pulse delay, then no note is played.
+	  - Second, if there is a pulse-delay, then a tick to the current counter is added, beacuse that means
+	    that one clock cycle has passed.
+	  - Third, if the tick count is greater than or equal to the measured pulse delay, then the step pins
+	    are pulsed; however, this occurs after the direction is checked and the registers are updated
+		move.
+	  - ***The rest of the next 8 if blocks is the same, but repeated for drives 2 - 8.
+   b) Synchronizing
+      - In order to avoid the combinational logic being run while the registers containing the pulse delay
+	    are set, period_out_sync registers are instead set to current_period_out registers at the end of
+		every 98 kHz clock cycle.
+   c) Resetting
+      - In order to keep the read/write heads at position 0 when they are off (position 0 means as far back
+	    as they can go), the combinational logic outputs a PWM signal to reset the drives all back to
+		position 0.
+   d) Setting the state
+      - The state-setting block simply sets state to next_state, but only if the clock is valid
+
+******************
+* floppy_drive.e *
+******************
+
+OVERVIEW:
+
+The floppy driver is a program written in assembly to push notes to the floppy_controller. The driver works
+by setting a note value (as a specific pulse delay) to each of the 8 out ports, and then setting the command
+signal to 1. The driver then waits for a response from the floppy controller. Once it receives a response,
+the driver returns (or in the test case, halts).
+
+DETAILS:
+
+There is not much to the details outside of the overview. The port mappings are as follows:
+- Drive 1 port:    201
+- Drive 2 port:    202
+- Drive 3 port:    203
+- Drive 4 port:    204
+- Drive 5 port:    205
+- Drive 6 port:    206
+- Drive 7 port:    207
+- Drive 8 port:    208
+- floppy_command:  209
+- floppy_response: 210
+
+*********
+* top.v *
+*********
+
+OVERVIEW:
+
+top.v was modified so that the floppy_controller could be used with the E100. The main changes include
+adding out ports 201 - 209 for the pulse-delay and the floppy_command, as well as in port 210 for the
+floppy_response. Wires were added as necessary.
+
+DETAILS:
+
+The specific changes can be found on lines 212 - 213, 304 - 312, and 832 - 875
+
+1) Lines 212 - 213
+   The only addition was adding an unused port for use with floppy_command
+2) Lines 303 - 311
+   Wires for current_period_in 1 through 8, floppy_command, and floppy_response were added
+3) Lines 832 - 875
+   Out ports for current_period_in 1 through 8 and floppy_command were added, as well as an in port
+   for floppy_response.
